@@ -12,7 +12,6 @@ Base URL: `https://rapid.codes`
 |---|---|---|
 | `POST` | `/api/v1/links` | Create a short link (or get the existing one for this URL) |
 | `GET` | `/{code}` | Redirect to the long URL |
-| `GET` | `/health` | Liveness check |
 
 ---
 
@@ -104,20 +103,6 @@ stops working immediately and click statistics can be added later (D1).
 |---|---|---|
 | `404` | `not_found` | No link with this code ever existed. Also returned for codes with invalid characters and for reserved words (D9). |
 | `410` | `link_disabled` | The link existed but has been disabled, for any reason (D6) |
-
----
-
-## `GET /health`
-
-Liveness check for Docker and the hosting platform. Answers "is the process
-running?" only. It does **not** check the database.
-
-```http
-HTTP/1.1 200 OK
-Content-Type: application/json
-
-{ "status": "ok" }
-```
 
 ---
 

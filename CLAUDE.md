@@ -33,6 +33,8 @@ Rules:
   example from this project.
 - **Be brutally honest.** No flattery, no softening. If something is wrong,
   weak, or will not hold up in an interview, say so directly.
+- Whenever an HTTP status code is mentioned, also say in words what it means,
+  for example `410 Gone` (the link existed but was removed).
 - Think step by step, show the reasoning, and be honest. If an idea of Denis's
   has a problem, say so clearly and explain why.
 - Brainstorm before building. Present options, then wait for Denis's decision.
@@ -109,8 +111,8 @@ accounts, and the Redis cache.
 ## Roadmap
 
 0. Requirements (done)
-1. API design: OpenAPI spec  ← **next**
-2. LLD: data model, classes, interfaces
+1. API design: `docs/api.md` (done)
+2. LLD: data model, classes, interfaces  ← **next**
 3. Core implementation and unit tests
 4. Observability: structured JSON logs, request IDs, Prometheus metrics, Grafana
 5. HLD and scaling: Redis cache, multiple workers or instances
