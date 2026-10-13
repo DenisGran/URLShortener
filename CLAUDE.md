@@ -31,6 +31,8 @@ every line in the repo in an interview.
 Rules:
 - Explain every new technical term the first time it appears, with a concrete
   example from this project.
+- **Be brutally honest.** No flattery, no softening. If something is wrong,
+  weak, or will not hold up in an interview, say so directly.
 - Think step by step, show the reasoning, and be honest. If an idea of Denis's
   has a problem, say so clearly and explain why.
 - Brainstorm before building. Present options, then wait for Denis's decision.
@@ -79,17 +81,20 @@ accounts, and the Redis cache.
 | D4 | Concurrent creation is protected by the database constraint, using `INSERT ... ON CONFLICT (url_hash) DO NOTHING` | "Check, then insert" is not safe under concurrency (race condition). |
 | D5 | `201 Created` for a new link, `200 OK` when it already existed, with the same response body | Makes `POST` idempotent in practice. |
 | D6 | A **disabled** link returns **`410 Gone`** on redirect, whatever the reason it was disabled | It existed and was intentionally removed. `404` is for codes that never existed. |
-| D7 | URL normalization: only safe changes (lowercase scheme and host, remove default ports). Never change the path, trailing slash, or query order. | A wrong guess would redirect people to the wrong page. |
+| D7 | URL normalization: only safe changes (lowercase scheme and host). Never change the path, trailing slash, or query order. | A wrong guess would redirect people to the wrong page. |
 | D8 | Cache comes later, but the code is designed for it now: `LinkService` depends on a `LinkRepository` interface, and `CachedLinkRepository` will wrap the Postgres one | Make it work, make it right, make it fast. Shows Open/Closed and Dependency Inversion. |
 | D9 | API on the same domain under `/api/v1/`. Reserved words (`api`, `docs`, `health`, `metrics`, ...) can never be short codes. | Simpler for v1. Avoids collisions with real paths. |
 | D10 | Errors use **RFC 9457 Problem Details** (`application/problem+json`) plus a machine-readable `code` field (for example `"invalid_url"`) | A recognized standard instead of an invented format. `code` lets clients branch without parsing text. |
 | D11 | `POST` with a URL whose link is disabled returns **`422`** with `code: "url_disabled"` | The request is valid but this URL is not allowed. Same shape a future Safe Browsing rejection will use. `410` would wrongly suggest the `/links` collection is gone. |
 | D12 | URL limits: maximum **2048** characters. Invalid request bodies return **`422`** (FastAPI's default). | Common practical URL limit. Keeps one status code for "understood but invalid". |
+| D13 | **Reject any URL with an explicit port**, including default ones (`:80`, `:443`) | Denis's choice. Simplest rule, closes off links to unusual services. Cost: a few legitimate URLs (sites on `:8080`, or a pasted `:443`) are refused. |
+| D14 | `201 Created` includes `Location: <short_url>` | Denis's choice. No extra endpoint in v1. Cost: strictly, `Location` should point to the created resource, not to the redirect; `GET /api/v1/links/{code}` can be added later. |
 
 ## Abuse protection (required before going online)
 
 - Rate limiting per IP for link creation (for example, 10 per minute)
-- URL validation: only `http` and `https` schemes, a maximum length, and reject
+- URL validation: only `http` and `https` schemes, a maximum length (D12), no
+  explicit port (D13), and reject
   links that point back to `rapid.codes` itself (redirect loops)
 - The ability to disable a link (see D6)
 - Later: check new URLs against Google Safe Browsing
@@ -100,9 +105,6 @@ accounts, and the Redis cache.
   discussion: adding a salt only shifts the counter, so codes stay sequential.
   Alternatives are a keyed scramble of the counter (a bijection) or 7 random
   Base62 characters with a retry on collision.
-- **`Location` header on `201`**: add `GET /api/v1/links/{code}`, point it at
-  the short URL, or omit it.
-- **Explicit ports** (for example `:8080`): confirm the exact rule.
 
 ## Roadmap
 
