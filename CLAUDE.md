@@ -83,8 +83,8 @@ accounts, and the Redis cache.
 |---|---|---|
 | D1 | Redirects use **302**, sent with `Cache-Control: no-store` | Every click reaches the server, so statistics can be added later and a disabled link stops working immediately. Cost: more load, which the cache will solve later. |
 | D2 | **Same long URL gives the same short code** (deduplication) | Denis's choice. Disabling targets the destination, so it applies to everyone. |
-| D3 | Dedup lookup uses a `url_hash` column (SHA-256 of the normalized URL) with a **UNIQUE** index | Long URLs can exceed Postgres's index entry size limit. |
-| D4 | Concurrent creation is protected by the database constraint, using `INSERT ... ON CONFLICT (url_hash) DO NOTHING` | "Check, then insert" is not safe under concurrency (race condition). |
+| D3 | Dedup uses a **UNIQUE** index directly on `url` (`COLLATE "C"`). No hash column. | D12 caps URLs at 2048 bytes, below the B-tree entry limit (~2700 bytes). Measured: SHA-256 costs ~0.4 µs vs ~1 ms for the DB round trip, and the space difference is negligible at our scale, so the simpler design wins. Revisit (add a SHA-256 `url_hash`) if URLs become unbounded or the index must fit in RAM at large scale. |
+| D4 | Concurrent creation is protected by the database constraint, using `INSERT ... ON CONFLICT (url) DO NOTHING` | "Check, then insert" is not safe under concurrency (race condition). |
 | D5 | `201 Created` for a new link, `200 OK` when it already existed, with the same response body | Makes `POST` idempotent in practice. |
 | D6 | A **disabled** link returns **`410 Gone`** on redirect, whatever the reason it was disabled | It existed and was intentionally removed. `404` is for codes that never existed. |
 | D7 | URL normalization: only safe changes (lowercase scheme and host). Never change the path, trailing slash, or query order. | A wrong guess would redirect people to the wrong page. |
@@ -92,11 +92,14 @@ accounts, and the Redis cache.
 | D9 | API on the same domain under `/api/v1/`. Reserved words (`api`, `docs`, `health`, `metrics`, ...) can never be short codes. | Simpler for v1. Avoids collisions with real paths. |
 | D10 | Errors use **RFC 9457 Problem Details** (`application/problem+json`) plus a machine-readable `code` field (for example `"invalid_url"`) | A recognized standard instead of an invented format. `code` lets clients branch without parsing text. |
 | D11 | `POST` with a URL whose link is disabled returns **`422`** with `code: "url_disabled"` | The request is valid but this URL is not allowed. Same shape a future Safe Browsing rejection will use. `410` would wrongly suggest the `/links` collection is gone. |
-| D12 | URL limits: maximum **2048** characters. Invalid request bodies return **`422`** (FastAPI's default). | Common practical URL limit. Keeps one status code for "understood but invalid". |
+| D12 | URL limits: maximum **2048 bytes** (`octet_length`, not characters: non-ASCII characters take 2-4 bytes). Invalid request bodies return **`422`** (FastAPI's default). | Common practical URL limit. Keeps one status code for "understood but invalid". |
 | D13 | **Reject any URL with an explicit port**, including default ones (`:80`, `:443`) | Denis's choice. Simplest rule, closes off links to unusual services. Cost: a few legitimate URLs (sites on `:8080`, or a pasted `:443`) are refused. |
 | D14 | `201 Created` includes `Location: <short_url>` | Denis's choice. No extra endpoint in v1. Cost: strictly, `Location` should point to the created resource, not to the redirect; `GET /api/v1/links/{code}` can be added later. |
 | D15 | Short codes are **7 random Base62 characters** (from `secrets`), with a **UNIQUE** index on `code`. On a collision, generate a new code and retry, at most 3 attempts, then `503`. | Unpredictable codes (no enumeration). Retry chance = links in use / 62^7, about 1 in 3.5 million at 1M links. Rejected: counter, salt, epoch+counter (predictable), hash slice (same as random), multiplicative scramble (easily reversed), Feistel (too complex), KGS and an in-memory pool (operational cost, RAM), 5 chars (too dense), 3 words (too long). |
 | D16 | Rate limits per IP (per `/64` prefix for IPv6): `POST` 10/min, redirects 100/min, `404` responses 10/min. `429` with `Retry-After`. Counters must be shared across workers. | Enumeration produces mostly `404`s, so a strict `404` limit stops it without hurting real users. MAC addresses are not visible to the server. Known cost: users behind a shared NAT IP share the limit. |
+| D17 | `code` is the **primary key** of `links`. No surrogate `id`. | The lookup index on `code` is needed anyway, so a separate `id` would only add a second index. Revisit if other tables need foreign keys, a link can have several codes (custom aliases), or a code must be changeable. |
+| D18 | Disabling is a `disabled BOOLEAN NOT NULL DEFAULT false` column | Denis's choice: simplest. Cost: no record of when or why a link was disabled. |
+| D19 | `created_at TIMESTAMPTZ NOT NULL DEFAULT now()` | The database clock is the single source of time for all workers. Postgres stores the instant in UTC (the offset is not kept). Local time is a display concern. |
 
 ## Abuse protection (required before going online)
 

@@ -72,7 +72,7 @@ the same code.
 
 Checked in this order. The first failure is reported.
 
-1. At most **2048** characters (D12).
+1. At most **2048 bytes** in UTF-8 (D12). Non-ASCII characters count as 2-4 bytes.
 2. Parses as an absolute URL with a host.
 3. Scheme is `http` or `https`.
 4. **No explicit port**, not even `:80` or `:443` (D13).
