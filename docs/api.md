@@ -17,7 +17,7 @@ Base URL: `https://rapid.codes`
 
 ## `POST /api/v1/links`
 
-Shortens a URL. Anonymous, no authentication. Rate limited per IP.
+Shortens a URL. Anonymous, no authentication. [Rate limited](#rate-limits).
 
 ### Request
 
@@ -54,7 +54,7 @@ the same code.
 
 | Field | Description |
 |---|---|
-| `code` | The short code. Base62 characters (`0-9`, `a-z`, `A-Z`). Length is not part of the contract. |
+| `code` | The short code: random Base62 characters (`0-9`, `a-z`, `A-Z`), currently 7 (D15). Clients must not rely on the length. |
 | `short_url` | The full short link, ready to share. |
 | `url` | The stored URL **after normalization** (D7), which may differ from what was sent, for example `HTTPS://Example.com/a` becomes `https://example.com/a`. |
 
@@ -66,6 +66,7 @@ the same code.
 | `422` | `invalid_url` | `url` breaks one of the [URL rules](#url-rules). `detail` says which. |
 | `422` | `url_disabled` | A link for this URL exists but has been disabled (D11) |
 | `429` | `rate_limited` | Too many links created from this IP. See `Retry-After`. |
+| `503` | `code_generation_failed` | No free code was found after 3 attempts (D15). Extremely rare; safe to retry. |
 
 ### URL rules
 
@@ -103,6 +104,24 @@ stops working immediately and click statistics can be added later (D1).
 |---|---|---|
 | `404` | `not_found` | No link with this code ever existed. Also returned for codes with invalid characters and for reserved words (D9). |
 | `410` | `link_disabled` | The link existed but has been disabled, for any reason (D6) |
+| `429` | `rate_limited` | Too many redirects, or too many unknown codes, from this IP. See `Retry-After`. |
+
+---
+
+## Rate limits
+
+Limits apply per client IP address. For IPv6, they apply per `/64` prefix,
+because one user typically controls a whole `/64` block (D16).
+
+| Request | Limit |
+|---|---|
+| `POST /api/v1/links` | 10 per minute |
+| `GET /{code}` that redirects | 100 per minute |
+| `GET /{code}` that returns `404` | 10 per minute |
+
+The strict `404` limit targets enumeration: someone guessing codes gets mostly
+`404` responses, while normal users almost never do. A limited request gets
+`429 Too Many Requests` with a `Retry-After` header.
 
 ---
 
@@ -148,7 +167,8 @@ details (no stack traces, no SQL).
 | `validation_error` | 422 | `POST /api/v1/links` |
 | `invalid_url` | 422 | `POST /api/v1/links` |
 | `url_disabled` | 422 | `POST /api/v1/links` |
-| `rate_limited` | 429 | `POST /api/v1/links` |
+| `rate_limited` | 429 | any |
+| `code_generation_failed` | 503 | `POST /api/v1/links` |
 | `not_found` | 404 | `GET /{code}` |
 | `link_disabled` | 410 | `GET /{code}` |
 | `internal_error` | 500 | any |

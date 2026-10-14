@@ -61,8 +61,12 @@ Rules:
 - **PostgreSQL**, **SQLAlchemy 2.0** (ORM), **Alembic** (migrations)
 - **pytest** for tests
 - **Docker** for running everything consistently
-- Hosting: **free tier only**. Check the provider's current limits and its
-  load-testing policy before deploying.
+- Hosting: **Azure for Students** (GitHub Student Pack): $100 credit per year
+  plus 12 months of free services (B1s VM, PostgreSQL Flexible Server B1ms).
+  The Azure account is shared with Denis's other projects, so keep costs minimal.
+  Create the account only close to deployment (the 12 months start at sign-up).
+  Check Azure's load-testing rules before running load tests.
+- Domain: **rapid.codes**, already owned by Denis.
 
 ## Scope of v1
 
@@ -91,10 +95,12 @@ accounts, and the Redis cache.
 | D12 | URL limits: maximum **2048** characters. Invalid request bodies return **`422`** (FastAPI's default). | Common practical URL limit. Keeps one status code for "understood but invalid". |
 | D13 | **Reject any URL with an explicit port**, including default ones (`:80`, `:443`) | Denis's choice. Simplest rule, closes off links to unusual services. Cost: a few legitimate URLs (sites on `:8080`, or a pasted `:443`) are refused. |
 | D14 | `201 Created` includes `Location: <short_url>` | Denis's choice. No extra endpoint in v1. Cost: strictly, `Location` should point to the created resource, not to the redirect; `GET /api/v1/links/{code}` can be added later. |
+| D15 | Short codes are **7 random Base62 characters** (from `secrets`), with a **UNIQUE** index on `code`. On a collision, generate a new code and retry, at most 3 attempts, then `503`. | Unpredictable codes (no enumeration). Retry chance = links in use / 62^7, about 1 in 3.5 million at 1M links. Rejected: counter, salt, epoch+counter (predictable), hash slice (same as random), multiplicative scramble (easily reversed), Feistel (too complex), KGS and an in-memory pool (operational cost, RAM), 5 chars (too dense), 3 words (too long). |
+| D16 | Rate limits per IP (per `/64` prefix for IPv6): `POST` 10/min, redirects 100/min, `404` responses 10/min. `429` with `Retry-After`. Counters must be shared across workers. | Enumeration produces mostly `404`s, so a strict `404` limit stops it without hurting real users. MAC addresses are not visible to the server. Known cost: users behind a shared NAT IP share the limit. |
 
 ## Abuse protection (required before going online)
 
-- Rate limiting per IP for link creation (for example, 10 per minute)
+- Rate limiting per IP for creation and redirects (D16)
 - URL validation: only `http` and `https` schemes, a maximum length (D12), no
   explicit port (D13), and reject
   links that point back to `rapid.codes` itself (redirect loops)
@@ -103,10 +109,37 @@ accounts, and the Redis cache.
 
 ## Open decisions
 
-- **Short-code strategy.** Denis proposed `encode(salt + counter)`. Under
-  discussion: adding a salt only shifts the counter, so codes stay sequential.
-  Alternatives are a keyed scramble of the counter (a bijection) or 7 random
-  Base62 characters with a retry on collision.
+- None right now.
+
+## Azure cost savings (remind Denis before deployment, roadmap step 7)
+
+The free 12-month allowances are per account, not per project: one B1s VM and
+one Postgres server shared by all of Denis's projects.
+
+1. One VM for all projects: a Docker Compose stack per project, one Caddy in
+   front routing by domain (free Let's Encrypt HTTPS).
+2. Slim images (`python:3.x-slim`) and 1-2 Uvicorn workers (1 GB RAM is shared).
+3. Check the free list for a larger free Arm/AMD size (B2pts v2 / B2ats v2).
+4. No Azure Load Balancer, Application Gateway, or Front Door. Caddy does the job.
+5. One Postgres server, one database and one user per project.
+6. Keep Postgres backup retention at 7 days (32 GB backup storage included).
+7. After the free 12 months: consider Postgres in Docker on the VM.
+8. DNS at the registrar or Cloudflare free, not Azure DNS. Behind Cloudflare,
+   rate limiting must read the client IP from `CF-Connecting-IP`.
+9. Check whether the public IPv4 address is billed.
+10. Everything in one region (cross-region traffic costs money).
+11. Images on GitHub Container Registry, not Azure Container Registry.
+12. CI on GitHub Actions (free for public repos).
+13. Monitoring off the VM (Datadog / New Relic from the Student Pack). Avoid
+    Azure Monitor / Log Analytics (billed per GB).
+14. Docker log rotation (`max-size`, `max-file`).
+15. Redis (later) in Docker on the VM, not Azure Cache for Redis.
+16. Load tests from the laptop or GitHub Actions, not Azure Load Testing.
+17. Budget alert in Azure Cost Management (for example at $5 and $10).
+18. Create the Azure account only close to deployment.
+
+Open for step 6: load tests on a shared VM are distorted by the other projects.
+Options: stop the other projects, publish local numbers, or use a temporary VM.
 
 ## Roadmap
 
