@@ -70,16 +70,28 @@ the same code.
 
 ### URL rules
 
-Checked in this order. The first failure is reported.
+The URL is parsed and normalized with the WHATWG URL standard, the same rules
+browsers use (D7, D23):
 
-1. At most **2048 bytes** in UTF-8 (D12). Non-ASCII characters count as 2-4 bytes.
-2. Parses as an absolute URL with a host.
-3. Scheme is `http` or `https`.
-4. **No explicit port**, not even `:80` or `:443` (D13).
+- scheme and host are lowercased,
+- default ports (`:80` for `http`, `:443` for `https`) are removed,
+- an empty path becomes `/`,
+- `.` and `..` path segments are resolved,
+- spaces and non-ASCII characters in the path and query are percent-encoded.
+
+Query order and the fragment are kept. For example,
+`HTTPS://Example.com:443` is stored as `https://example.com/`.
+
+Then these rules are checked. The first failure is reported.
+
+1. Parses as an absolute URL with scheme `http` or `https`.
+2. **No username or password** (`https://user@host/`, D24). An `@` in the path
+   or query is fine.
+3. **No non-default port** (D13). `:8080` is rejected; `:443` on `https` is not.
+4. **No internationalized domain** (D25). Hosts with non-ASCII characters are
+   rejected. Non-ASCII characters in the path are fine.
 5. Host is not `rapid.codes` or any subdomain of it (prevents redirect loops).
-
-Then the URL is normalized (D7): scheme and host are lowercased. Nothing else
-changes: path, trailing slash, query order, and fragment are kept exactly.
+6. At most **2048 bytes** after normalization (D12).
 
 ---
 

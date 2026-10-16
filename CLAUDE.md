@@ -22,7 +22,7 @@ every line in the repo in an interview.
 
 | Area | Who writes it | Claude's role |
 |---|---|---|
-| Core logic: Base62 encoder, short-code generation, `LinkService`, repositories | **Denis** | Explain the concept, give hints, review his code. **Do not write the implementation unless Denis explicitly asks for that specific piece.** |
+| Core logic: short-code generation, URL validation and normalization, `LinkService`, repositories | **Denis** | Explain the concept, give hints, review his code. **Do not write the implementation unless Denis explicitly asks for that specific piece.** |
 | Unit tests for the core | **Denis** | Suggest test cases, review. Do not write them unless asked. |
 | Boilerplate: Docker, docker-compose, CI, config, tooling | Claude | Write it and **explain every line**. |
 | Design decisions and ADRs | **Denis decides and writes** | Lay out the options and trade-offs, then review. Never decide for him. |
@@ -33,6 +33,9 @@ Rules:
   example from this project.
 - **Be brutally honest.** No flattery, no softening. If something is wrong,
   weak, or will not hold up in an interview, say so directly.
+- Whenever a decision is referenced by number (D1, D2, ...), add a few words of
+  context, for example "D13 (reject non-default ports)". Denis does not
+  memorize the numbers.
 - Whenever an HTTP status code is mentioned, also say in words what it means,
   for example `410 Gone` (the link existed but was removed).
 - Think step by step, show the reasoning, and be honest. If an idea of Denis's
@@ -87,25 +90,33 @@ accounts, and the Redis cache.
 | D4 | Concurrent creation is protected by the database constraint, using `INSERT ... ON CONFLICT (url) DO NOTHING` | "Check, then insert" is not safe under concurrency (race condition). |
 | D5 | `201 Created` for a new link, `200 OK` when it already existed, with the same response body | Makes `POST` idempotent in practice. |
 | D6 | A **disabled** link returns **`410 Gone`** on redirect, whatever the reason it was disabled | It existed and was intentionally removed. `404` is for codes that never existed. |
-| D7 | URL normalization: only safe changes (lowercase scheme and host). Never change the path, trailing slash, or query order. | A wrong guess would redirect people to the wrong page. |
+| D7 | URL normalization is **whatever Pydantic's `HttpUrl` does** (WHATWG URL standard, the same rules browsers apply): lowercase scheme and host, drop default ports, add `/` to an empty path (`url_preserve_empty_path=False`), resolve `.` and `..` in the path, percent-encode spaces and non-ASCII. Query order and fragment are kept. | Denis's choice (revised): saves writing a parser, and browsers resolve these the same way, so the destination does not change. Bonus: `https://EXAMPLE.com`, `https://example.com:443/` and `https://example.com/` deduplicate to one link. |
 | D8 | Cache comes later, but the code is designed for it now: `LinkService` depends on a `LinkRepository` interface, and `CachedLinkRepository` will wrap the Postgres one | Make it work, make it right, make it fast. Shows Open/Closed and Dependency Inversion. |
 | D9 | API on the same domain under `/api/v1/`. Reserved words (`api`, `docs`, `health`, `metrics`, ...) can never be short codes. | Simpler for v1. Avoids collisions with real paths. |
 | D10 | Errors use **RFC 9457 Problem Details** (`application/problem+json`) plus a machine-readable `code` field (for example `"invalid_url"`) | A recognized standard instead of an invented format. `code` lets clients branch without parsing text. |
 | D11 | `POST` with a URL whose link is disabled returns **`422`** with `code: "url_disabled"` | The request is valid but this URL is not allowed. Same shape a future Safe Browsing rejection will use. `410` would wrongly suggest the `/links` collection is gone. |
-| D12 | URL limits: maximum **2048 bytes** (`octet_length`, not characters: non-ASCII characters take 2-4 bytes). Invalid request bodies return **`422`** (FastAPI's default). | Common practical URL limit. Keeps one status code for "understood but invalid". |
-| D13 | **Reject any URL with an explicit port**, including default ones (`:80`, `:443`) | Denis's choice. Simplest rule, closes off links to unusual services. Cost: a few legitimate URLs (sites on `:8080`, or a pasted `:443`) are refused. |
+| D12 | URL limits: maximum **2048 bytes** (`octet_length`), checked on the normalized URL. After `HttpUrl` the URL is pure ASCII, so bytes equal characters. Invalid request bodies return **`422`** (FastAPI's default). | Common practical URL limit. Keeps one status code for "understood but invalid". |
+| D13 | **Reject non-default ports** (anything other than 80 for `http`, 443 for `https`). Default ports are allowed and removed by normalization (D7). | Denis's choice (revised): `https://example.com:443` is the same address as `https://example.com`. `HttpUrl` cannot tell an explicit `:443` from none anyway. Cost: sites on ports like `:8080` are refused. |
 | D14 | `201 Created` includes `Location: <short_url>` | Denis's choice. No extra endpoint in v1. Cost: strictly, `Location` should point to the created resource, not to the redirect; `GET /api/v1/links/{code}` can be added later. |
-| D15 | Short codes are **7 random Base62 characters** (from `secrets`), with a **UNIQUE** index on `code`. On a collision, generate a new code and retry, at most 3 attempts, then `503`. | Unpredictable codes (no enumeration). Retry chance = links in use / 62^7, about 1 in 3.5 million at 1M links. Rejected: counter, salt, epoch+counter (predictable), hash slice (same as random), multiplicative scramble (easily reversed), Feistel (too complex), KGS and an in-memory pool (operational cost, RAM), 5 chars (too dense), 3 words (too long). |
+| D15 | Short codes are **7 random Base62 characters**, each picked with `secrets.choice` (no Base62 encoder needed), with a **UNIQUE** index on `code`. On a collision, generate a new code and retry, at most 3 attempts, then `503`. | Unpredictable codes (no enumeration). Retry chance = links in use / 62^7, about 1 in 3.5 million at 1M links. Rejected: counter, salt, epoch+counter (predictable), hash slice (same as random), multiplicative scramble (easily reversed), Feistel (too complex), KGS and an in-memory pool (operational cost, RAM), 5 chars (too dense), 3 words (too long). |
 | D16 | Rate limits per IP (per `/64` prefix for IPv6): `POST` 10/min, redirects 100/min, `404` responses 10/min. `429` with `Retry-After`. Counters must be shared across workers. | Enumeration produces mostly `404`s, so a strict `404` limit stops it without hurting real users. MAC addresses are not visible to the server. Known cost: users behind a shared NAT IP share the limit. |
 | D17 | `code` is the **primary key** of `links`. No surrogate `id`. | The lookup index on `code` is needed anyway, so a separate `id` would only add a second index. Revisit if other tables need foreign keys, a link can have several codes (custom aliases), or a code must be changeable. |
 | D18 | Disabling is a `disabled BOOLEAN NOT NULL DEFAULT false` column | Denis's choice: simplest. Cost: no record of when or why a link was disabled. |
 | D19 | `created_at TIMESTAMPTZ NOT NULL DEFAULT now()` | The database clock is the single source of time for all workers. Postgres stores the instant in UTC (the offset is not kept). Local time is a display concern. |
+| D20 | The code-collision **retry loop lives in `LinkService`**. The repository only signals a collision (a `CodeCollision` exception). | "At most 3 attempts" is a business rule, and it is testable with an in-memory repository and a fake code generator. |
+| D21 | **Where rate-limit counters live is decided at deployment.** First choice: Caddy (needs a rate-limit plugin, to be checked), so no app code. | Postgres counters add a write to every request. In-memory counters are wrong with several workers. |
+| D22 | **Async database access**: SQLAlchemy async with the `asyncpg` driver | While one request waits for Postgres (~1 ms), the event loop serves others. Consistent with choosing FastAPI for async. Real concurrency is capped by the connection pool size. |
+| D23 | URL parsing and validation use **Pydantic `HttpUrl`** plus extra validators on the request model, not a hand-written parser | Saves code: parsing, scheme check (`http`/`https`), lowercasing, length. Pydantic models are plain Python, so the rules are still testable without FastAPI. URL errors are mapped to `invalid_url` (D10) in the error handler. |
+| D24 | **Reject URLs with a username or password** (`https://google.com@evil.com/`). An `@` in the path or query (`https://medium.com/@user`) is fine. | Phishing trick: the text before `@` looks like the host, but the real host is after it. |
+| D25 | **Reject internationalized domains** (any host label starting with `xn--`, which is what `HttpUrl` turns non-ASCII hosts into). Non-ASCII in the path is fine. | Denis's choice. Blocks homograph attacks (`аррӏе.com` in Cyrillic looks like `apple.com`). Cost: legitimate non-Latin domains (`.рф`, Hebrew or Chinese domains) are refused. |
+| D26 | Interfaces use **`abc.ABC`** with `@abstractmethod` | Denis's choice. Implementations inherit explicitly. A missing method fails when the object is created. |
 
 ## Abuse protection (required before going online)
 
 - Rate limiting per IP for creation and redirects (D16)
 - URL validation: only `http` and `https` schemes, a maximum length (D12), no
-  explicit port (D13), and reject
+  non-default port (D13), no username or password (D24), no internationalized
+  domain (D25), and reject
   links that point back to `rapid.codes` itself (redirect loops)
 - The ability to disable a link (see D6)
 - Later: check new URLs against Google Safe Browsing
